@@ -1,4 +1,5 @@
-﻿using ContainerFlow.DDD;
+using ContainerFlow.Contracts.Eventos;
+using ContainerFlow.DDD;
 
 namespace ContainerFlow.Vendas.Propostas;
 
@@ -35,14 +36,16 @@ public record ValorMonetario
     public decimal Valor { get; }
 }
 
-public class Proposta : IAgreggateRoot
+public class Proposta : AggregateRoot<Guid>
 {
-    public ICollection<IDomainEvent> Events { get; }
     public Proposta()
     {
-        Events = new List<IDomainEvent>();
+        Id = Guid.NewGuid();
+        NomeArquivo = string.Empty;
+        ValorTotal = new ValorMonetario(0);
+        DataCriacao = DateTime.UtcNow;
     }
-    public Guid Id { get; set; }
+
     public SituacaoProposta Situacao { get; set; } = SituacaoProposta.Enviada;
     public ValorMonetario ValorTotal { get; set; }
     public DateTime DataCriacao { get; set; }
@@ -50,13 +53,16 @@ public class Proposta : IAgreggateRoot
     public string NomeArquivo { get; set; }
     public Guid ClienteId { get; set; }
     public Guid SolicitacaoId { get; set; }
-    public PedidoLocacao Solicitacao { get; set; }
-    public ICollection<Comentario> Comentarios { get; } = [];
+    public PedidoLocacao? Solicitacao { get; set; }
+    public ICollection<Comentario> Comentarios { get; } = new List<Comentario>();
 
     public Comentario AddComentario(Comentario comentario)
     {
         if (Situacao == SituacaoProposta.Enviada)
+        {
+            comentario.PropostaId = Id;
             Comentarios.Add(comentario);
+        }
         return comentario;
     }
 
@@ -69,12 +75,17 @@ public class Proposta : IAgreggateRoot
     {
         if (Situacao != SituacaoProposta.Enviada) return false;
         Situacao = SituacaoProposta.Aceita;
-        Events.Add(new PropostaAprovada(Id, ValorTotal.Valor));
+        AdicionarEvento(new PropostaAprovadaEvent(Id, ValorTotal?.Valor ?? 0, ClienteId, SolicitacaoId));
         return true;
     }
 
-    public void RemoverEventos()
+    public void Recusar()
     {
-        Events.Clear();
+        Situacao = SituacaoProposta.Recusada;
+    }
+
+    public void Cancelar()
+    {
+        Situacao = SituacaoProposta.Cancelada;
     }
 }

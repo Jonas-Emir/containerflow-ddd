@@ -1,4 +1,4 @@
-﻿using ContainerFlow.Contracts;
+using ContainerFlow.Contracts;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ContainerFlow.Clientes.Cadastro;
@@ -23,15 +23,12 @@ public static class AprovacaoClientesEndpoints
     public static RouteGroupBuilder MapApproveRegistroCliente(this RouteGroupBuilder builder)
     {
         builder.MapPatch("registration/{id:guid}/approve", async (
-            [FromRoute] Guid id
-            , [FromServices] IRepository<Cliente> repository
-            , [FromServices] IAcessoManager userManager
-            , CancellationToken cancellationToken) =>
+            [FromRoute] Guid id,
+            [FromServices] IClienteRepository repository,
+            [FromServices] IAcessoManager userManager,
+            CancellationToken cancellationToken) =>
         {
-            var cliente = await repository
-                .GetFirstAsync(
-                    c => c.Id == id,
-                    c => c.Id);
+            var cliente = await repository.ObterPorIdAsync(id, cancellationToken);
             if (cliente is null) return Results.NotFound();
 
             await userManager.AdicionarClienteAsync(cliente.Email.Value, cancellationToken);
@@ -46,15 +43,12 @@ public static class AprovacaoClientesEndpoints
     public static RouteGroupBuilder MapRejectRegistroCliente(this RouteGroupBuilder builder)
     {
         builder.MapPatch("registration/{id:guid}/reject", async (
-            [FromRoute] Guid id
-            , [FromServices] IRepository<Cliente> repository
-            , [FromServices] IAcessoManager userManager
-            , CancellationToken cancellationToken) =>
+            [FromRoute] Guid id,
+            [FromServices] IClienteRepository repository,
+            [FromServices] IAcessoManager userManager,
+            CancellationToken cancellationToken) =>
         {
-            var cliente = await repository
-                .GetFirstAsync(
-                    c => c.Id == id,
-                    c => c.Id);
+            var cliente = await repository.ObterPorIdAsync(id, cancellationToken);
             if (cliente is null) return Results.NotFound();
 
             await userManager.BloquearClienteAsync(cliente.Email.Value, cancellationToken);

@@ -1,4 +1,4 @@
-﻿using ContainerFlow.Contracts;
+using ContainerFlow.Contracts;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ContainerFlow.Vendas.Locacoes;
@@ -23,7 +23,8 @@ public static class LocacoesEndpoints
     {
         builder.MapGet("", async (
             HttpContext context,
-            [FromServices] IRepository<Locacao> repository) =>
+            [FromServices] ILocacaoRepository repository,
+            CancellationToken cancellationToken) =>
         {
             var clienteId = context.User.Claims
                 .Where(c => c.Type.Equals("ClienteId"))
@@ -31,8 +32,7 @@ public static class LocacoesEndpoints
                 .FirstOrDefault();
             if (clienteId is null) return Results.Unauthorized();
 
-            var locacoes = await repository
-                .GetWhereAsync(l => l.ClienteId == Guid.Parse(clienteId));
+            var locacoes = await repository.ObterPorClienteAsync(Guid.Parse(clienteId), cancellationToken);
             return Results.Ok(locacoes.Select(LocacaoResponse.From));
         })
         .WithSummary("Lista o histórico de locações do cliente");

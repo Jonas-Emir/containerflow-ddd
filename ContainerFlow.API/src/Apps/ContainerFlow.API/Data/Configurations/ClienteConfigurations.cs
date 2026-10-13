@@ -1,4 +1,3 @@
-﻿using ContainerFlow.Clientes.Cadastro;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -8,6 +7,7 @@ public class ClienteConfigurations : IEntityTypeConfiguration<Cliente>
 {
     public void Configure(EntityTypeBuilder<Cliente> builder)
     {
+        builder.ToTable("Clientes", "clientes");
         builder.HasKey(c => c.Id);
 
         builder

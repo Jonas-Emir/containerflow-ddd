@@ -1,8 +1,12 @@
-using ContainerFlow.Api.Eventos;
 using ContainerFlow.API.Data;
-using ContainerFlow.API.Data.Repositories;
+using ContainerFlow.API.Extensions;
 using ContainerFlow.API.Identity;
+using ContainerFlow.Clientes;
+using ContainerFlow.Engenharia;
+using ContainerFlow.Engenharia.Containers;
+using ContainerFlow.Financeiro;
 using ContainerFlow.Financeiro.Faturamento;
+using ContainerFlow.Vendas;
 using Hangfire;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -11,30 +15,27 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddProblemDetails();
 
 builder.Services.AddDbContext<IdentityDbContext>(options =>
 {
-    options
-        .UseSqlServer(builder.Configuration.GetConnectionString("IdentityDB"));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("IdentityDB"));
 });
 
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
-    options
-        .UseSqlServer(builder.Configuration.GetConnectionString("ContainerFlowDB"));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("ContainerFlowDB"));
 });
 
-builder.Services.AddScoped<IRepository<Cliente>, ClienteRepository>();
-builder.Services.AddScoped<IRepository<PedidoLocacao>, SolicitacaoRepository>();
-builder.Services.AddScoped<IRepository<Proposta>, PropostaRepository>();
-builder.Services.AddScoped<IRepository<Locacao>, LocacaoRepository>();
-builder.Services.AddScoped<IRepository<Conteiner>, ConteinerRepository>();
-builder.Services.AddScoped<IRepository<Fatura>, FaturaRepository>();
-builder.Services.AddScoped<IEventoManager, EventoManager>();
+// Infraestrutura de Persistencia e Repositorios
+builder.Services.AddPersistenceInfrastructure();
 
-builder.Services.AddScoped<ICalculadoraPrazosLocacao, CalculadoraPadraoPrazosLocacao>();
-builder.Services.AddScoped<IPropostaService, PropostaService>();
-builder.Services.AddScoped<IAcessoManager, AcessoManagerWithIdentity>();
+// Modulos dos Bounded Contexts
+builder.Services
+    .AddClientesModule()
+    .AddVendasModule()
+    .AddEngenhariaModule()
+    .AddFinanceiroModule();
 
 builder.Services
     .AddIdentityApiEndpoints<AppUser>(options => options.SignIn.RequireConfirmedEmail = true)
@@ -62,26 +63,30 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+app.UseExceptionHandler();
 app.UseHttpsRedirection();
-
 app.UseAuthorization();
 
-app
-    .MapIdentityEndpoints()
-    .MapClientesEndpoints()
-    .MapAprovacaoClientesEndpoints()
-    .MapSolicitacoesEndpoints()
-    .MapPropostasEndpoints()
-    .MapLocacoesEndpoints()
-    .MapConteineresEndpoints();
+// Endpoints Identity & Modulos
+app.MapIdentityEndpoints();
+app.MapClientesModule();
+app.MapVendasModule();
+app.MapEngenhariaModule();
+app.MapFinanceiroModule();
 
-// EmissorDeFaturas
-app.Services
-    .GetRequiredService<IRecurringJobManager>()
-    .AddOrUpdate<EmissorDeFaturas>(
-        nameof(EmissorDeFaturas),
-        job => job.ExecutarAsync(),
-        Cron.Minutely
-    );
+// Background Consumers (EDA Monolito Modular)
+var recurringJobManager = app.Services.GetRequiredService<IRecurringJobManager>();
+
+recurringJobManager.AddOrUpdate<EmissorDeFaturas>(
+    nameof(EmissorDeFaturas),
+    job => job.ExecutarAsync(),
+    Cron.Minutely
+);
+
+recurringJobManager.AddOrUpdate<ReservadorDeConteiner>(
+    nameof(ReservadorDeConteiner),
+    job => job.ExecutarAsync(),
+    Cron.Minutely
+);
 
 app.Run();

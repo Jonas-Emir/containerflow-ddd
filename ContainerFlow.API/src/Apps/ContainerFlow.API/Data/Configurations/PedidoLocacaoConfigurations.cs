@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace ContainerFlow.Api.Data.Configurations;
@@ -7,6 +7,8 @@ public class PedidoLocacaoConfigurations : IEntityTypeConfiguration<PedidoLocaca
 {
     public void Configure(EntityTypeBuilder<PedidoLocacao> builder)
     {
+        builder.ToTable("PedidosLocacao", "vendas");
+        builder.HasKey(p => p.Id);
         builder.OwnsOne(s => s.Status, status =>
         {
             status.Property(s => s.Status)

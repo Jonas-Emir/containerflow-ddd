@@ -1,4 +1,6 @@
-﻿namespace ContainerFlow.Engenharia.Containers;
+using ContainerFlow.DDD;
+
+namespace ContainerFlow.Engenharia.Containers;
 
 /// <summary>
 ///         ON - O contêiner está ligado e funcionando normalmente.
@@ -18,11 +20,37 @@ public enum StatusConteiner
     CHARGING
 }
 
-public class Conteiner
+public class Conteiner : AggregateRoot<Guid>
 {
-    public Guid Id { get; set; }
+    public Conteiner()
+    {
+        Id = Guid.NewGuid();
+    }
+
     public StatusConteiner Status { get; set; } = StatusConteiner.OFF;
     public string? Observacoes { get; set; }
     public Guid LocacaoId { get; set; }
-}
 
+    public void ReservarParaLocacao(Guid locacaoId)
+    {
+        LocacaoId = locacaoId;
+        Status = StatusConteiner.STANDBY;
+        Observacoes = $"Reservado para locacao/proposta {locacaoId} em {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}";
+    }
+
+    public void LiberarLocacao()
+    {
+        LocacaoId = Guid.Empty;
+        Status = StatusConteiner.OFF;
+        Observacoes = $"Liberado em {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}";
+    }
+
+    public void AlterarStatus(StatusConteiner novoStatus, string? motivo = null)
+    {
+        Status = novoStatus;
+        if (!string.IsNullOrWhiteSpace(motivo))
+        {
+            Observacoes = motivo;
+        }
+    }
+}

@@ -1,4 +1,4 @@
-﻿using ContainerFlow.Vendas.Locacoes;
+using ContainerFlow.Vendas.Locacoes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -8,6 +8,8 @@ public class LocacaoConfigurations : IEntityTypeConfiguration<Locacao>
 {
     public void Configure(EntityTypeBuilder<Locacao> builder)
     {
+        builder.ToTable("Locacoes", "vendas");
+        builder.HasKey(l => l.Id);
         builder.OwnsOne(locacao => locacao.Status, status =>
         {
             status.Property(s => s.Status)

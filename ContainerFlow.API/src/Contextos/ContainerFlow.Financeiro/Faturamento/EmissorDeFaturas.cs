@@ -1,47 +1,65 @@
-﻿using ContainerFlow.Contracts;
+using ContainerFlow.Contracts;
+using ContainerFlow.Contracts.Eventos;
 
 namespace ContainerFlow.Financeiro.Faturamento;
 
-public class PropostaAprovada
-{
-    public Guid IdProposta { get; set; }
-    public decimal ValorProposta { get; set; }
-}
-
 public class EmissorDeFaturas
 {
-    private readonly IRepository<Fatura> repoFatura;
-    private readonly IEventoManager eventoManager;
+    private readonly IFaturaRepository _repoFatura;
+    private readonly IEventoManager _eventoManager;
+    private readonly IUnitOfWork _unitOfWork;
 
-    public EmissorDeFaturas(IRepository<Fatura> repoFatura, IEventoManager eventoManager)
+    public EmissorDeFaturas(
+        IFaturaRepository repoFatura,
+        IEventoManager eventoManager,
+        IUnitOfWork unitOfWork)
     {
-        this.repoFatura = repoFatura;
-        this.eventoManager = eventoManager;
+        _repoFatura = repoFatura;
+        _eventoManager = eventoManager;
+        _unitOfWork = unitOfWork;
     }
 
-    public async Task ExecutarAsync()
+    public Task ExecutarAsync() => ExecutarAsync(CancellationToken.None);
+
+    public async Task ExecutarAsync(CancellationToken cancellationToken)
     {
-        var mensagens = await eventoManager
-            .RecuperarNaoLidasAsync<PropostaAprovada>(
-                "PropostaAprovada", 
-                nameof(EmissorDeFaturas));
-
-        foreach(var mensagem in mensagens)
-        {
-            Fatura fatura = new()
+        await _eventoManager.ProcessarEventoIdempotenteAsync<PropostaAprovadaEvent>(
+            nameof(PropostaAprovadaEvent),
+            nameof(EmissorDeFaturas),
+            async (mensagem, ct) =>
             {
-                Id = Guid.NewGuid(),
-                DataEmissao = DateTime.Now,
-                DataVencimento = DateTime.Now.AddDays(5),
-                Numero = "304823908",
-                Total = mensagem.Corpo.ValorProposta,
-                //LocacaoId = ?? // ACL
-            };
+                var fatura = new Fatura
+                {
+                    Id = Guid.NewGuid(),
+                    DataEmissao = DateTime.UtcNow,
+                    DataVencimento = DateTime.UtcNow.AddDays(5),
+                    Numero = $"FAT-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString()[..8].ToUpperInvariant()}",
+                    Total = mensagem.Corpo.ValorProposta
+                };
 
-            await repoFatura.AddAsync(fatura);
+                await _repoFatura.AdicionarAsync(fatura, ct);
+                await _unitOfWork.CommitAsync(ct);
+            },
+            cancellationToken);
 
-            await eventoManager
-                .MarcarComoLidaAsync(mensagem.Id, nameof(EmissorDeFaturas));
-        }
+        // Suporte retrocompatível caso haja eventos gravados com o nome 'PropostaAprovada'
+        await _eventoManager.ProcessarEventoIdempotenteAsync<PropostaAprovadaEvent>(
+            "PropostaAprovada",
+            nameof(EmissorDeFaturas),
+            async (mensagem, ct) =>
+            {
+                var fatura = new Fatura
+                {
+                    Id = Guid.NewGuid(),
+                    DataEmissao = DateTime.UtcNow,
+                    DataVencimento = DateTime.UtcNow.AddDays(5),
+                    Numero = $"FAT-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString()[..8].ToUpperInvariant()}",
+                    Total = mensagem.Corpo.ValorProposta
+                };
+
+                await _repoFatura.AdicionarAsync(fatura, ct);
+                await _unitOfWork.CommitAsync(ct);
+            },
+            cancellationToken);
     }
 }

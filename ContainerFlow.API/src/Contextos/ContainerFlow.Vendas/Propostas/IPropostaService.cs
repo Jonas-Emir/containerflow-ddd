@@ -1,78 +1,73 @@
-﻿using ContainerFlow.Contracts;
+using ContainerFlow.Contracts;
 using ContainerFlow.Vendas.Locacoes;
-using System.Transactions;
 
 namespace ContainerFlow.Vendas.Propostas;
 
 public interface IPropostaService
 {
-    Task<Proposta?> AprovarAsync(AprovarProposta comando);
-    Task<Proposta?> ComentarAsync(ComentarProposta comando);
+    Task<Proposta?> AprovarAsync(AprovarProposta comando, CancellationToken cancellationToken = default);
+    Task<Proposta?> ComentarAsync(ComentarProposta comando, CancellationToken cancellationToken = default);
 }
 
 public class PropostaService : IPropostaService
 {
-    private readonly IRepository<Proposta> repoProposta;
-    private readonly IRepository<Locacao> repoLocacao;
-    private readonly ICalculadoraPrazosLocacao calculadora;
+    private readonly IPropostaRepository _repoProposta;
+    private readonly ILocacaoRepository _repoLocacao;
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly ICalculadoraPrazosLocacao _calculadora;
 
-    public PropostaService(IRepository<Proposta> repoProposta, IRepository<Locacao> repoLocacao, ICalculadoraPrazosLocacao calculadora)
+    public PropostaService(
+        IPropostaRepository repoProposta,
+        ILocacaoRepository repoLocacao,
+        IUnitOfWork unitOfWork,
+        ICalculadoraPrazosLocacao calculadora)
     {
-        this.repoProposta = repoProposta;
-        this.repoLocacao = repoLocacao;
-        this.calculadora = calculadora;
+        _repoProposta = repoProposta;
+        _repoLocacao = repoLocacao;
+        _unitOfWork = unitOfWork;
+        _calculadora = calculadora;
     }
 
-    public async Task<Proposta?> AprovarAsync(AprovarProposta comando)
+    public async Task<Proposta?> AprovarAsync(AprovarProposta comando, CancellationToken cancellationToken = default)
     {
-        var proposta = await repoProposta
-                .GetFirstAsync(
-                    p => p.Id == comando.IdProposta && p.SolicitacaoId == comando.IdPedido,
-                    p => p.Id);
+        var proposta = await _repoProposta.ObterPorIdEPedidoAsync(comando.IdProposta, comando.IdPedido, cancellationToken);
         if (proposta is null) return null;
 
         if (proposta.Aprovar())
         {
-            // criar locação a partir da proposta aceita
-            var locacao = new Locacao()
+            var locacao = new Locacao
             {
+                Id = Guid.NewGuid(),
                 PropostaId = proposta.Id,
-                DataInicio = DateTime.Now,
-                DataPrevistaEntrega = calculadora
-                    .CalculaDataPrevistaParaEntrega(proposta),
-                DataTermino = calculadora
-                    .CalculaDataPrevistaParaTermino(proposta)
+                ClienteId = proposta.ClienteId,
+                DataInicio = DateTime.UtcNow,
+                DataPrevistaEntrega = _calculadora.CalculaDataPrevistaParaEntrega(proposta),
+                DataTermino = _calculadora.CalculaDataPrevistaParaTermino(proposta)
             };
 
-            using var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled);
-
-            await repoProposta.UpdateAsync(proposta);
-            await repoLocacao.AddAsync(locacao);
-
-            scope.Complete();
+            await _repoProposta.AtualizarAsync(proposta, cancellationToken);
+            await _repoLocacao.AdicionarAsync(locacao, cancellationToken);
+            await _unitOfWork.CommitAsync(cancellationToken);
         }
 
         return proposta;
     }
 
-    public async Task<Proposta?> ComentarAsync(ComentarProposta comando)
+    public async Task<Proposta?> ComentarAsync(ComentarProposta comando, CancellationToken cancellationToken = default)
     {
-        var proposta = await repoProposta
-                .GetFirstAsync(
-                    p => p.Id == comando.IdProposta && p.SolicitacaoId == comando.IdPedido,
-                    p => p.Id);
+        var proposta = await _repoProposta.ObterPorIdEPedidoAsync(comando.IdProposta, comando.IdPedido, cancellationToken);
         if (proposta is null) return null;
 
-        
-        proposta.AddComentario(new Comentario()
+        proposta.AddComentario(new Comentario
         {
             Id = Guid.NewGuid(),
-            Data = DateTime.Now,
+            Data = DateTime.UtcNow,
             Usuario = comando.Pessoa,
             Texto = comando.Mensagem
         });
 
-        await repoProposta.UpdateAsync(proposta);
+        await _repoProposta.AtualizarAsync(proposta, cancellationToken);
+        await _unitOfWork.CommitAsync(cancellationToken);
         return proposta;
     }
 }

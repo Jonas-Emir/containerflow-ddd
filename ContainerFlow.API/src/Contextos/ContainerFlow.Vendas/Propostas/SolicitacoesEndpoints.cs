@@ -1,4 +1,4 @@
-﻿using ContainerFlow.Contracts;
+using ContainerFlow.Contracts;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ContainerFlow.Vendas.Propostas;
@@ -6,6 +6,7 @@ namespace ContainerFlow.Vendas.Propostas;
 public static class SolicitacoesEndpoints
 {
     public const string ENDPOINT_NAME_GET_SOLICITACAO = "GetSolicitacao";
+
     public static IEndpointRouteBuilder MapSolicitacoesEndpoints(this IEndpointRouteBuilder builder)
     {
         var group = builder
@@ -26,13 +27,11 @@ public static class SolicitacoesEndpoints
     public static RouteGroupBuilder MapGetSolicitacaoById(this RouteGroupBuilder builder)
     {
         builder.MapGet("{id}", async (
-            [FromRoute] Guid id
-            , [FromServices] IRepository<PedidoLocacao> repository) =>
+            [FromRoute] Guid id,
+            [FromServices] ISolicitacaoRepository repository,
+            CancellationToken cancellationToken) =>
         {
-            var solicitacao = await repository
-                .GetFirstAsync(
-                    s => s.Id == id,
-                    s => s.Id);
+            var solicitacao = await repository.ObterPorIdAsync(id, cancellationToken);
             if (solicitacao is null) return Results.NotFound();
             return Results.Ok(SolicitacaoResponse.From(solicitacao));
         })
@@ -46,7 +45,8 @@ public static class SolicitacoesEndpoints
     {
         builder.MapGet("", async (
             HttpContext context,
-            [FromServices] IRepository<PedidoLocacao> repository) =>
+            [FromServices] ISolicitacaoRepository repository,
+            CancellationToken cancellationToken) =>
         {
             var clienteId = context.User.Claims
                 .Where(c => c.Type.Equals("ClienteId"))
@@ -55,7 +55,7 @@ public static class SolicitacoesEndpoints
 
             if (clienteId is null) return Results.Unauthorized();
 
-            var solicitacoes = await repository.GetWhereAsync(s => s.ClienteId == Guid.Parse(clienteId) && s.Status.Status.Equals("Ativa"));
+            var solicitacoes = await repository.ObterAtivasPorClienteAsync(Guid.Parse(clienteId), cancellationToken);
             return Results.Ok(solicitacoes.Select(SolicitacaoResponse.From));
         })
         .WithSummary("Lista as solicitações ativas do cliente")
@@ -67,9 +67,11 @@ public static class SolicitacoesEndpoints
     public static RouteGroupBuilder MapPostSolicitacao(this RouteGroupBuilder builder)
     {
         builder.MapPost("", async (
-            [FromBody] SolicitacaoRequest request
-            , HttpContext context
-            , [FromServices] IRepository<PedidoLocacao> repository) =>
+            [FromBody] SolicitacaoRequest request,
+            HttpContext context,
+            [FromServices] ISolicitacaoRepository repository,
+            [FromServices] IUnitOfWork unitOfWork,
+            CancellationToken cancellationToken) =>
         {
             var clienteId = context.User.Claims
                 .Where(c => c.Type.Equals("ClienteId"))
@@ -94,13 +96,14 @@ public static class SolicitacoesEndpoints
             }
             else
             {
-                solicitacao.Localizacao = new Endereco()
+                solicitacao.Localizacao = new Endereco
                 {
                     CEP = request.Localizacao.CEP ?? "00000-010",
                 };
             }
 
-            await repository.AddAsync(solicitacao);
+            await repository.AdicionarAsync(solicitacao, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
             return Results.CreatedAtRoute(ENDPOINT_NAME_GET_SOLICITACAO, new { id = solicitacao.Id }, SolicitacaoResponse.From(solicitacao));
         })
@@ -113,17 +116,17 @@ public static class SolicitacoesEndpoints
     public static RouteGroupBuilder MapDeleteSolicitacao(this RouteGroupBuilder builder)
     {
         builder.MapDelete("{id}", async (
-            [FromRoute] Guid id
-            , [FromServices] IRepository<PedidoLocacao> repository) =>
+            [FromRoute] Guid id,
+            [FromServices] ISolicitacaoRepository repository,
+            [FromServices] IUnitOfWork unitOfWork,
+            CancellationToken cancellationToken) =>
         {
-            var solicitacao = await repository
-                .GetFirstAsync(
-                    s => s.Id == id,
-                    s => s.Id);
+            var solicitacao = await repository.ObterPorIdAsync(id, cancellationToken);
             if (solicitacao is null) return Results.NotFound();
 
-            solicitacao.Status = StatusPedido.Cancelada;
-            await repository.UpdateAsync(solicitacao);
+            solicitacao.Cancelar();
+            await repository.AtualizarAsync(solicitacao, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
             return Results.NoContent();
         })

@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Http;
+using System.ComponentModel.DataAnnotations;
 
 namespace ContainerFlow.Vendas.Propostas;
 
@@ -11,20 +12,20 @@ public class PropostaRequest
     [Required]
     public DateTime DataExpiracao { get; set; }
     [Required]
-    public IFormFile Arquivo { get; set; }
+    public IFormFile Arquivo { get; set; } = null!;
 }
 
 public class SolicitacaoRequest
 {
     [Required]
-    public string Finalidade { get; set; }
+    public string Finalidade { get; set; } = string.Empty;
     public int QuantidadeEstimada { get; set; }
     [Required]
-    public PeriodoRequest Periodo { get; set; }
+    public PeriodoRequest Periodo { get; set; } = new();
     [Required]
-    public LocalizacaoRequest Localizacao { get; set; }
+    public LocalizacaoRequest Localizacao { get; set; } = new();
     [Required]
-    public string Descricao { get; set; }
+    public string Descricao { get; set; } = string.Empty;
 }
 
 public class LocalizacaoRequest

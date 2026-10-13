@@ -1,56 +1,111 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using ContainerFlow.API.Data;
+using ContainerFlow.Contracts;
 using Microsoft.EntityFrameworkCore;
 
 namespace ContainerFlow.Api.Eventos;
 
 public class EventoManager : IEventoManager
 {
-    private readonly AppDbContext context;
+    private readonly AppDbContext _context;
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public EventoManager(AppDbContext context)
     {
-        this.context = context;
+        _context = context;
     }
 
-    public async Task MarcarComoLidaAsync(Guid idEvento, string tipoLeitor)
+    public async Task MarcarComoLidaAsync(
+        Guid idEvento,
+        string tipoLeitor,
+        bool sucesso = true,
+        string? erro = null,
+        CancellationToken cancellationToken = default)
     {
-        var outbox = await context.Outbox
-            .FirstOrDefaultAsync(o => o.Id == idEvento);
+        var outbox = await _context.Outbox
+            .FirstOrDefaultAsync(o => o.Id == idEvento, cancellationToken);
         if (outbox is null) return;
 
-        var inbox = new InboxMessage
-        {
-            Id = Guid.NewGuid(),
-            OutboxMessageId = outbox.Id,
-            Evento = outbox,
-            TipoLeitor = tipoLeitor,
-            DataProcessamento = DateTime.Now
-        };
+        var inboxExistente = await _context.Inbox
+            .FirstOrDefaultAsync(i => i.OutboxMessageId == outbox.Id && i.TipoLeitor == tipoLeitor, cancellationToken);
 
-        await context.Inbox.AddAsync(inbox);
-        await context.SaveChangesAsync();
+        if (inboxExistente is not null)
+        {
+            inboxExistente.Sucesso = sucesso;
+            inboxExistente.Erro = erro;
+            inboxExistente.DataProcessamentoUtc = DateTime.UtcNow;
+        }
+        else
+        {
+            var inbox = new InboxMessage
+            {
+                Id = Guid.NewGuid(),
+                OutboxMessageId = outbox.Id,
+                TipoLeitor = tipoLeitor,
+                DataProcessamentoUtc = DateTime.UtcNow,
+                Sucesso = sucesso,
+                Erro = erro
+            };
+            await _context.Inbox.AddAsync(inbox, cancellationToken);
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<IEnumerable<Mensagem<T>>> RecuperarNaoLidasAsync<T>(string tipoEvento, string tipoLeitor)
+    public async Task<IReadOnlyList<Mensagem<T>>> RecuperarNaoLidasAsync<T>(
+        string tipoEvento,
+        string tipoLeitor,
+        CancellationToken cancellationToken = default)
     {
-        var mensagens = await context.Outbox
-            .FromSqlRaw(@"
-                SELECT o.* 
-                FROM Outbox o 
-                    LEFT JOIN Inbox i on i.OutboxMessageId = o.Id 
-                        AND i.TipoLeitor = {0}
-                WHERE i.Id IS NULL AND o.TipoEvento = {1}", tipoLeitor, tipoEvento
-            )
-            .ToListAsync();
+        var mensagens = await _context.Outbox
+            .Where(o => o.TipoEvento == tipoEvento &&
+                        !_context.Inbox.Any(i => i.OutboxMessageId == o.Id && i.TipoLeitor == tipoLeitor && i.Sucesso))
+            .OrderBy(o => o.DataCriacaoUtc)
+            .ToListAsync(cancellationToken);
 
-        var saida = mensagens
-            .Select(outbox =>
+        var saida = new List<Mensagem<T>>();
+
+        foreach (var outbox in mensagens)
+        {
+            var obj = JsonSerializer.Deserialize<T>(outbox.InfoEvento, JsonOptions);
+            if (obj is not null)
             {
-                var obj = JsonSerializer.Deserialize<T>(outbox.InfoEvento);
-                return new Mensagem<T>() { Id = outbox.Id, Corpo = obj! };
-            }).ToList();
+                saida.Add(new Mensagem<T>
+                {
+                    Id = outbox.Id,
+                    CorrelationId = outbox.CorrelationId,
+                    OcorreuEmUtc = outbox.DataCriacaoUtc,
+                    Corpo = obj
+                });
+            }
+        }
 
-        return saida;
+        return saida.AsReadOnly();
+    }
+
+    public async Task ProcessarEventoIdempotenteAsync<T>(
+        string tipoEvento,
+        string tipoLeitor,
+        Func<Mensagem<T>, CancellationToken, Task> manipulador,
+        CancellationToken cancellationToken = default)
+    {
+        var mensagens = await RecuperarNaoLidasAsync<T>(tipoEvento, tipoLeitor, cancellationToken);
+
+        foreach (var mensagem in mensagens)
+        {
+            try
+            {
+                await manipulador(mensagem, cancellationToken);
+                await MarcarComoLidaAsync(mensagem.Id, tipoLeitor, sucesso: true, erro: null, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                await MarcarComoLidaAsync(mensagem.Id, tipoLeitor, sucesso: false, erro: ex.Message, cancellationToken);
+                throw;
+            }
+        }
     }
 }

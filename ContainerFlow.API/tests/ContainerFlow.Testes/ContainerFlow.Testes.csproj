@@ -17,7 +17,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="9.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Apps\ContainerFlow.API\ContainerFlow.API.csproj" />
+    <ProjectReference Include="..\..\src\ContainerFlow.Contracts\ContainerFlow.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\ContainerFlow.DDD\ContainerFlow.DDD.csproj" />
     <ProjectReference Include="..\..\src\Contextos\ContainerFlow.Clientes\ContainerFlow.Clientes.csproj" />
+    <ProjectReference Include="..\..\src\Contextos\ContainerFlow.Engenharia\ContainerFlow.Engenharia.csproj" />
+    <ProjectReference Include="..\..\src\Contextos\ContainerFlow.Financeiro\ContainerFlow.Financeiro.csproj" />
+    <ProjectReference Include="..\..\src\Contextos\ContainerFlow.Vendas\ContainerFlow.Vendas.csproj" />
   </ItemGroup>
 
   <ItemGroup>

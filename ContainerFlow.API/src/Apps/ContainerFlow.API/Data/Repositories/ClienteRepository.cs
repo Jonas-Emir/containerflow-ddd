@@ -1,53 +1,72 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using System.Linq.Expressions;
 
 namespace ContainerFlow.API.Data.Repositories;
 
-public class ClienteRepository(AppDbContext dbContext) : IRepository<Cliente>
+public class ClienteRepository : BaseRepository<Cliente>, IClienteRepository
 {
-    public async Task<Cliente> AddAsync(Cliente cliente, CancellationToken cancellationToken = default)
+    private readonly AppDbContext _dbContext;
+
+    public ClienteRepository(AppDbContext dbContext) : base(dbContext)
     {
-        await dbContext.Clientes.AddAsync(cliente, cancellationToken);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        return cliente;
+        _dbContext = dbContext;
     }
 
-    public async Task<IEnumerable<Cliente>> GetWhereAsync(Expression<Func<Cliente, bool>>? filtro = null, CancellationToken cancellationToken = default)
+    public async Task<Cliente?> ObterPorIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        IQueryable<Cliente> queryClientes = dbContext.Clientes;
-        if (filtro != null)
-        {
-            queryClientes = queryClientes.Where(filtro);
-        }
-        return await queryClientes
-            .AsNoTracking()
+        return await _dbContext.Clientes
+            .Include(c => c.Enderecos)
+            .FirstOrDefaultAsync(c => c.Id == id, cancellationToken);
+    }
+
+    public async Task<Cliente?> ObterPorEmailAsync(string email, CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.Clientes
+            .Include(c => c.Enderecos)
+            .FirstOrDefaultAsync(c => c.Email.Value == email, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Cliente>> ObterTodosAsync(CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.Clientes
+            .Include(c => c.Enderecos)
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<Cliente?> GetFirstAsync<TProperty>(Expression<Func<Cliente, bool>> filtro, Expression<Func<Cliente, TProperty>> orderBy, CancellationToken cancellationToken = default)
+    public async Task AdicionarAsync(Cliente cliente, CancellationToken cancellationToken = default)
     {
-        return await dbContext.Clientes
-            .Include(c => c.Enderecos)
-            .AsNoTracking()
-            .OrderBy(orderBy)
-            .FirstOrDefaultAsync(filtro, cancellationToken);
+        await _dbContext.Clientes.AddAsync(cliente, cancellationToken);
     }
 
-    public async Task RemoveAsync(Cliente cliente, CancellationToken cancellationToken = default)
+    public Task AtualizarAsync(Cliente cliente, CancellationToken cancellationToken = default)
     {
-        dbContext.Clientes.Remove(cliente);
-        await dbContext.SaveChangesAsync(cancellationToken);
-    }
-
-    public async Task<Cliente> UpdateAsync(Cliente cliente, CancellationToken cancellationToken = default)
-    {
-        dbContext.Set<EnderecoCli>()
+        _dbContext.Set<EnderecoCli>()
             .Where(e => e.ClienteId == cliente.Id && !cliente.Enderecos.Contains(e))
             .ToList()
-            .ForEach(e => dbContext.Set<EnderecoCli>().Remove(e));
+            .ForEach(e => _dbContext.Set<EnderecoCli>().Remove(e));
 
-        dbContext.Clientes.Update(cliente);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        return cliente;
+        var entry = _dbContext.ChangeTracker.Entries<Cliente>().FirstOrDefault(e => e.Entity.Id == cliente.Id);
+        if (entry == null)
+        {
+            _dbContext.Clientes.Update(cliente);
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task RemoverAsync(Cliente cliente, CancellationToken cancellationToken = default)
+    {
+        _dbContext.Clientes.Remove(cliente);
+        return Task.CompletedTask;
+    }
+
+    public override async Task<Cliente?> GetFirstAsync<TProperty>(
+        Expression<Func<Cliente, bool>> filtro,
+        Expression<Func<Cliente, TProperty>> orderBy,
+        CancellationToken cancellationToken = default)
+    {
+        return await _dbContext.Clientes
+            .Include(c => c.Enderecos)
+            .OrderBy(orderBy)
+            .FirstOrDefaultAsync(filtro, cancellationToken);
     }
 }

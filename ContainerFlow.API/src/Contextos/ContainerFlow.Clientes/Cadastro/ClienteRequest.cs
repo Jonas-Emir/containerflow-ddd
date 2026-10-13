@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 
 namespace ContainerFlow.Clientes.Cadastro;
 
@@ -6,7 +6,7 @@ public class EnderecoRequest
 {
     [Required]
     [Display(Prompt = "00.000-000")]
-    public string CEP { get; set; }
+    public string CEP { get; set; } = string.Empty;
     [Required]
     public string? Rua { get; set; }
     public string? Numero { get; set; }
@@ -21,11 +21,11 @@ public class EnderecoRequest
     public Endereco ToModel() => new()
     {
         CEP = CEP,
-        Rua = Rua!,
+        Rua = Rua ?? string.Empty,
         Numero = Numero,
         Complemento = Complemento,
         Bairro = Bairro,
-        Municipio = Municipio!,
+        Municipio = Municipio ?? string.Empty,
         Estado = UfStringConverter.From(Estado),
         Nome = Nome
     };
@@ -35,16 +35,16 @@ public class RegistroRequest
 {
     [Display(Name = "Nome (*)", Prompt = "Digite seu nome completo.")]
     [Required(ErrorMessage = "Campo obrigatório.")]
-    public string Nome { get; set; }
+    public string Nome { get; set; } = string.Empty;
 
     [Display(Name = "E-mail (*)", Prompt = "Digite seu melhor e-mail.")]
     [Required(ErrorMessage = "Campo obrigatório.")]
     [EmailAddress(ErrorMessage = "E-mail inválido.")]
-    public string Email { get; set; }
+    public string Email { get; set; } = string.Empty;
 
     [Display(Name = "CPF (*)", Prompt = "000.000.000-00")]
     [Required(ErrorMessage = "Campo obrigatório.")]
-    public string CPF { get; set; }
+    public string CPF { get; set; } = string.Empty;
     [Display(Prompt = "(00) 00000-0000")]
     public string? Celular { get; set; }
     public EnderecoRequest? Endereco { get; set; }

@@ -1,6 +1,5 @@
-﻿using ContainerFlow.Contracts;
+using ContainerFlow.Contracts;
 using Microsoft.AspNetCore.Mvc;
-using System.Transactions;
 
 namespace ContainerFlow.Clientes.Cadastro;
 
@@ -32,30 +31,29 @@ public static class ClientesEndpoints
     public static RouteGroupBuilder MapGetClienteById(this RouteGroupBuilder builder)
     {
         builder.MapGet("{id}", async (
-            [FromRoute] Guid id
-            , [FromServices] IRepository<Cliente> repository) =>
+            [FromRoute] Guid id,
+            [FromServices] IClienteRepository repository,
+            CancellationToken cancellationToken) =>
         {
-            var cliente = await repository
-                .GetFirstAsync(
-                    c => c.Id == id,
-                    c => c.Id);
+            var cliente = await repository.ObterPorIdAsync(id, cancellationToken);
             if (cliente is null) return Results.NotFound();
 
             return Results.Ok(ClienteResponse.From(cliente));
         })
         .WithName(ENDPOINT_NAME_GET_CLIENTE)
-        .Produces<IEnumerable<ClienteResponse>>(StatusCodes.Status200OK);
+        .Produces<ClienteResponse>(StatusCodes.Status200OK);
         return builder;
     }
 
     public static RouteGroupBuilder MapPostClientes(this RouteGroupBuilder builder)
     {
         builder.MapPost("registration", async (
-            [FromBody] RegistroRequest request
-            , [FromServices] IRepository<Cliente> repository) =>
+            [FromBody] RegistroRequest request,
+            [FromServices] IClienteRepository repository,
+            [FromServices] IUnitOfWork unitOfWork,
+            CancellationToken cancellationToken) =>
         {
-            var clienteExistente = await repository
-                .GetFirstAsync(c => c.Email.Value == request.Email, c => c.Id);
+            var clienteExistente = await repository.ObterPorEmailAsync(request.Email, cancellationToken);
             if (clienteExistente is not null) return Results.Conflict("Já existe cliente com o email informado!");
 
             var cliente = new Cliente(request.Nome, new Email(request.Email), request.CPF)
@@ -66,7 +64,8 @@ public static class ClientesEndpoints
             {
                 cliente.AddEndereco(request.Endereco.ToModel());
             }
-            await repository.AddAsync(cliente);
+            await repository.AdicionarAsync(cliente, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
             return Results.CreatedAtRoute(ENDPOINT_NAME_GET_CLIENTE, new { id = cliente.Id }, ClienteResponse.From(cliente));
         })
@@ -80,15 +79,17 @@ public static class ClientesEndpoints
         builder.MapPut("{id}", async (
             [FromRoute] Guid id,
             [FromBody] RegistroRequest request,
-            [FromServices] IRepository<Cliente> repository,
+            [FromServices] IClienteRepository repository,
+            [FromServices] IUnitOfWork unitOfWork,
             CancellationToken cancellationToken) =>
         {
-            var clienteExistente = await repository.GetFirstAsync(c => c.Id == id, c => c.Id);
+            var clienteExistente = await repository.ObterPorIdAsync(id, cancellationToken);
             if (clienteExistente is null) return Results.NotFound();
 
             clienteExistente.Celular = request.Celular;
 
-            await repository.UpdateAsync(clienteExistente, cancellationToken);
+            await repository.AtualizarAsync(clienteExistente, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
             return Results.Ok(ClienteResponse.From(clienteExistente));
         })
@@ -100,21 +101,19 @@ public static class ClientesEndpoints
     public static RouteGroupBuilder MapDeleteCliente(this RouteGroupBuilder builder)
     {
         builder.MapDelete("{id}", async (
-            [FromRoute] Guid id
-            , [FromServices] IRepository<Cliente> repository
-            , [FromServices] IAcessoManager userManager
-            , CancellationToken cancellationToken) =>
+            [FromRoute] Guid id,
+            [FromServices] IClienteRepository repository,
+            [FromServices] IAcessoManager userManager,
+            [FromServices] IUnitOfWork unitOfWork,
+            CancellationToken cancellationToken) =>
         {
-            var clienteExistente = await repository.GetFirstAsync(c => c.Id == id, c => c.Id);
+            var clienteExistente = await repository.ObterPorIdAsync(id, cancellationToken);
             if (clienteExistente is null) return Results.NotFound();
 
-            using var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled);
+            await userManager.RemoverClienteAsync(clienteExistente.Email.Value, cancellationToken);
+            await repository.RemoverAsync(clienteExistente, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
-            await userManager
-                .RemoverClienteAsync(clienteExistente.Email.Value, cancellationToken);
-            await repository.RemoveAsync(clienteExistente, cancellationToken);
-
-            scope.Complete();
             return Results.NoContent();
         })
         .Produces(StatusCodes.Status204NoContent)
@@ -126,27 +125,21 @@ public static class ClientesEndpoints
     {
         builder.MapGet("registration/status",
             async (
-                [FromQuery] string email
-                , [FromServices] IRepository<Cliente> repository
-                , [FromServices] IAcessoManager userManager
-                , CancellationToken cancellationToken) =>
+                [FromQuery] string email,
+                [FromServices] IClienteRepository repository,
+                [FromServices] IAcessoManager userManager,
+                CancellationToken cancellationToken) =>
             {
-                var cliente = await repository
-                    .GetFirstAsync(c => c.Email.Value.Equals(email), c => c.Id);
+                var cliente = await repository.ObterPorEmailAsync(email, cancellationToken);
                 if (cliente is null) return Results.NotFound();
 
-                // verificar se já existe user associado ao email do cliente
-                var acesso = await userManager
-                    .ClientePossuiAcessoAsync(cliente.Email.Value, cancellationToken);
+                var acesso = await userManager.ClientePossuiAcessoAsync(cliente.Email.Value, cancellationToken);
 
-                // se não houver user, retornar status Pendente
                 if (!acesso.HasValue)
                     return Results.Ok(RegistrationStatusResponse.Pendente(cliente));
 
-                // se houver user e EmailConfirmed for false, retornar Em análise
                 if (acesso.HasValue && !acesso.Value) return Results.Ok(RegistrationStatusResponse.Reprovado(cliente));
 
-                // se houver user e EmailConfirmed for true, retornar Aprovado
                 return Results.Ok(RegistrationStatusResponse.Aprovado(cliente));
             })
             .AllowAnonymous()
@@ -160,14 +153,16 @@ public static class ClientesEndpoints
         builder.MapPost("{id}/enderecos", async (
             [FromRoute] Guid id,
             [FromBody] EnderecoRequest request,
-            [FromServices] IRepository<Cliente> repository,
+            [FromServices] IClienteRepository repository,
+            [FromServices] IUnitOfWork unitOfWork,
             CancellationToken cancellationToken) =>
         {
-            var cliente = await repository.GetFirstAsync(c => c.Id == id, c => c.Id);
+            var cliente = await repository.ObterPorIdAsync(id, cancellationToken);
             if (cliente is null) return Results.NotFound();
 
             cliente.AddEndereco(request.ToModel());
-            await repository.UpdateAsync(cliente, cancellationToken);
+            await repository.AtualizarAsync(cliente, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
             return Results.CreatedAtRoute(ENDPOINT_NAME_GET_CLIENTE, new { id = cliente.Id }, ClienteResponse.From(cliente));
         })
@@ -182,10 +177,11 @@ public static class ClientesEndpoints
             [FromRoute] Guid id,
             [FromRoute] Guid idEndereco,
             [FromBody] EnderecoRequest request,
-            [FromServices] IRepository<Cliente> repository,
+            [FromServices] IClienteRepository repository,
+            [FromServices] IUnitOfWork unitOfWork,
             CancellationToken cancellationToken) =>
         {
-            var cliente = await repository.GetFirstAsync(c => c.Id == id, c => c.Id);
+            var cliente = await repository.ObterPorIdAsync(id, cancellationToken);
             if (cliente is null) return Results.NotFound();
 
             var endereco = cliente.Enderecos.FirstOrDefault(e => e.Id == idEndereco);
@@ -200,7 +196,8 @@ public static class ClientesEndpoints
             if (request.Estado is not null)
                 endereco.Estado = UfStringConverter.From(request.Estado);
 
-            await repository.UpdateAsync(cliente, cancellationToken);
+            await repository.AtualizarAsync(cliente, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
             return Results.Ok(ClienteResponse.From(cliente));
         })
@@ -214,23 +211,24 @@ public static class ClientesEndpoints
         builder.MapDelete("{id:guid}/enderecos/{idEndereco:guid}", async (
             [FromRoute] Guid id,
             [FromRoute] Guid idEndereco,
-            [FromServices] IRepository<Cliente> repository,
+            [FromServices] IClienteRepository repository,
+            [FromServices] IUnitOfWork unitOfWork,
             CancellationToken cancellationToken) =>
         {
-            var cliente = await repository.GetFirstAsync(c => c.Id == id, c => c.Id);
+            var cliente = await repository.ObterPorIdAsync(id, cancellationToken);
             if (cliente is null) return Results.NotFound();
 
             var endereco = cliente.Enderecos.FirstOrDefault(e => e.Id == idEndereco);
             if (endereco is null) return Results.NotFound();
 
             cliente.RemoveEndereco(endereco);
-            await repository.UpdateAsync(cliente, cancellationToken);
+            await repository.AtualizarAsync(cliente, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
-            return Results.Ok(ClienteResponse.From(cliente));
+            return Results.NoContent();
         })
         .Produces(StatusCodes.Status204NoContent)
         .Produces(StatusCodes.Status404NotFound);
         return builder;
     }
 }
-

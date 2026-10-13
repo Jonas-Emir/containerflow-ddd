@@ -1,7 +1,5 @@
-﻿using ContainerFlow.Contracts;
-using ContainerFlow.Vendas.Locacoes;
+using ContainerFlow.Contracts;
 using Microsoft.AspNetCore.Mvc;
-using System.Transactions;
 
 namespace ContainerFlow.Vendas.Propostas;
 
@@ -33,35 +31,34 @@ public static class PropostasEndpoints
             .MapPost("{id:guid}/proposals", async (
                 [FromRoute] Guid id,
                 [FromForm] PropostaRequest request,
-                [FromServices] IRepository<PedidoLocacao> repoSolicitacao,
-                [FromServices] IRepository<Proposta> repoProposta
+                [FromServices] ISolicitacaoRepository repoSolicitacao,
+                [FromServices] IPropostaRepository repoProposta,
+                [FromServices] IUnitOfWork unitOfWork,
+                CancellationToken cancellationToken
                 ) =>
             {
-                // salvar arquivo no sistema de arquivos configurado (não será feito neste curso)
-
-                var solicitacao = await repoSolicitacao
-                    .GetFirstAsync(s => s.Id == id, s => s.Id);
+                var solicitacao = await repoSolicitacao.ObterPorIdAsync(id, cancellationToken);
                 if (solicitacao is null) return Results.NotFound();
 
-                var proposta = new Proposta()
+                var proposta = new Proposta
                 {
                     Id = Guid.NewGuid(),
                     ClienteId = solicitacao.ClienteId,
                     ValorTotal = new ValorMonetario(request.ValorTotal),
-                    DataCriacao = DateTime.Now,
+                    DataCriacao = DateTime.UtcNow,
                     DataExpiracao = request.DataExpiracao,
                     NomeArquivo = request.Arquivo.FileName,
                     SolicitacaoId = solicitacao.Id
                 };
 
-                await repoProposta.AddAsync(proposta);
+                await repoProposta.AdicionarAsync(proposta, cancellationToken);
+                await unitOfWork.CommitAsync(cancellationToken);
 
                 return Results.CreatedAtRoute(
                     ENDPOINT_NAME_GET_PROPOSTA,
                     new { Id = proposta.SolicitacaoId, PropostaId = proposta.Id },
                     PropostaResponse.From(proposta));
             })
-            // deveria ser Comercial, mas para não criarmos usuários com papéis diferentes, usaremos o papel (role) Suporte
             .RequireAuthorization(policy => policy.RequireRole("Suporte"))
             .DisableAntiforgery()
             .WithSummary("Vendedor envia proposta de locação")
@@ -76,7 +73,8 @@ public static class PropostasEndpoints
             [FromRoute] Guid id,
             [FromRoute] Guid propostaId,
             [FromServices] IHttpContextAccessor accessor,
-            [FromServices] IRepository<Proposta> repository) =>
+            [FromServices] IPropostaRepository repository,
+            CancellationToken cancellationToken) =>
         {
             var clienteId = accessor.HttpContext?.User.Claims
                 .Where(c => c.Type.Equals("ClienteId"))
@@ -85,13 +83,8 @@ public static class PropostasEndpoints
 
             if (clienteId is null) return Results.Unauthorized();
 
-            var proposta = await repository
-                .GetFirstAsync(
-                    p => p.Id == propostaId
-                        && p.SolicitacaoId == id
-                        && p.ClienteId == Guid.Parse(clienteId),
-                    p => p.Id);
-            if (proposta is null) return Results.NotFound();
+            var proposta = await repository.ObterPorIdEPedidoAsync(propostaId, id, cancellationToken);
+            if (proposta is null || proposta.ClienteId != Guid.Parse(clienteId)) return Results.NotFound();
 
             return Results.Ok(PropostaResponse.From(proposta));
         })
@@ -109,7 +102,8 @@ public static class PropostasEndpoints
         builder.MapGet("{id:guid}/proposals", async (
             [FromRoute] Guid id,
             [FromServices] IHttpContextAccessor accessor,
-            [FromServices] IRepository<PedidoLocacao> repository) =>
+            [FromServices] ISolicitacaoRepository repository,
+            CancellationToken cancellationToken) =>
         {
             var clienteId = accessor.HttpContext?.User.Claims
                 .Where(c => c.Type.Equals("ClienteId"))
@@ -118,11 +112,8 @@ public static class PropostasEndpoints
 
             if (clienteId is null) return Results.Unauthorized();
 
-            var solicitacao = await repository
-                .GetFirstAsync(
-                    s => s.Id == id && s.ClienteId == Guid.Parse(clienteId),
-                    s => s.Id);
-            if (solicitacao is null) return Results.NotFound();
+            var solicitacao = await repository.ObterPorIdAsync(id, cancellationToken);
+            if (solicitacao is null || solicitacao.ClienteId != Guid.Parse(clienteId)) return Results.NotFound();
 
             return Results.Ok(solicitacao.Propostas.Select(p => PropostaResponse.From(p)));
         })
@@ -139,10 +130,11 @@ public static class PropostasEndpoints
         builder.MapPatch("{id:guid}/proposals/{propostaId:guid}/accept", async (
             [FromRoute] Guid id,
             [FromRoute] Guid propostaId,
-            [FromServices] IPropostaService service) =>
+            [FromServices] IPropostaService service,
+            CancellationToken cancellationToken) =>
         {
             var casoUso = new AprovarProposta(id, propostaId);
-            var proposta = await service.AprovarAsync(casoUso);
+            var proposta = await service.AprovarAsync(casoUso, cancellationToken);
             if (proposta is null) return Results.NotFound();
             return Results.Ok(PropostaResponse.From(proposta));
         })
@@ -159,17 +151,16 @@ public static class PropostasEndpoints
         builder.MapPatch("{id:guid}/proposals/{propostaId:guid}/reject", async (
             [FromRoute] Guid id,
             [FromRoute] Guid propostaId,
-            [FromServices] IRepository<Proposta> repository) =>
+            [FromServices] IPropostaRepository repository,
+            [FromServices] IUnitOfWork unitOfWork,
+            CancellationToken cancellationToken) =>
         {
-
-            var proposta = await repository
-                .GetFirstAsync(
-                    p => p.Id == propostaId && p.SolicitacaoId == id,
-                    p => p.Id);
+            var proposta = await repository.ObterPorIdEPedidoAsync(propostaId, id, cancellationToken);
             if (proposta is null) return Results.NotFound();
 
-            proposta.Situacao = SituacaoProposta.Recusada;
-            await repository.UpdateAsync(proposta);
+            proposta.Recusar();
+            await repository.AtualizarAsync(proposta, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
             return Results.Ok(PropostaResponse.From(proposta));
         })
@@ -188,27 +179,26 @@ public static class PropostasEndpoints
             [FromRoute] Guid propostaId,
             [FromBody] ComentarioRequest request,
             HttpContext context,
-            [FromServices] IRepository<Proposta> repository) =>
+            [FromServices] IPropostaRepository repository,
+            [FromServices] IUnitOfWork unitOfWork,
+            CancellationToken cancellationToken) =>
         {
-
-            var proposta = await repository
-                .GetFirstAsync(
-                    p => p.Id == propostaId && p.SolicitacaoId == id,
-                    p => p.Id);
+            var proposta = await repository.ObterPorIdEPedidoAsync(propostaId, id, cancellationToken);
             if (proposta is null) return Results.NotFound();
 
             string? quem = context.User.Identity?.Name;
             if (quem is null) return Results.Unauthorized();
 
-            proposta.AddComentario(new Comentario()
+            proposta.AddComentario(new Comentario
             {
                 Id = Guid.NewGuid(),
-                Data = DateTime.Now,
+                Data = DateTime.UtcNow,
                 Usuario = quem,
                 Texto = request.Comentario
             });
 
-            await repository.UpdateAsync(proposta);
+            await repository.AtualizarAsync(proposta, cancellationToken);
+            await unitOfWork.CommitAsync(cancellationToken);
 
             return Results.Ok(PropostaResponse.From(proposta));
         })

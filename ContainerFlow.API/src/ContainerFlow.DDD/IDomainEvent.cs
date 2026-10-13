@@ -1,5 +1,7 @@
-﻿
 namespace ContainerFlow.DDD;
-    public interface IDomainEvent
-    {
-    }
+
+public interface IDomainEvent
+{
+    Guid EventoId { get; }
+    DateTime OcorreuEmUtc { get; }
+}

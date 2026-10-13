@@ -1,4 +1,4 @@
-﻿using ContainerFlow.Contracts;
+using ContainerFlow.Contracts;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ContainerFlow.Engenharia.Containers;
@@ -25,13 +25,10 @@ public static class ContaineresEndpoints
     {
         builder.MapGet("{id:guid}", async (
             [FromRoute] Guid id,
-            [FromServices] IRepository<Conteiner> repository) =>
+            [FromServices] IConteinerRepository repository,
+            CancellationToken cancellationToken) =>
         {
-
-            var conteiner = await repository
-                .GetFirstAsync(
-                    c => c.Id == id,
-                    p => p.Id);
+            var conteiner = await repository.ObterPorIdAsync(id, cancellationToken);
             if (conteiner is null) return Results.NotFound();
 
             return Results.Ok(ConteinerResponse.From(conteiner));
