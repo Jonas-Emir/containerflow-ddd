@@ -9,19 +9,10 @@ O código é organizado em Bounded Contexts, que agem como módulos independente
 A comunicação entre os componentes é feita de forma desacoplada através de Domain Events, que sinalizam eventos importantes que já aconteceram. 
 Por fim, uma Camada Anti-Corrupção (ACL) protege o nosso domínio de modelos externos, traduzindo a comunicação com sistemas de terceiros e legados.
 
-## Projeto em Construção:
+## Documentação de Arquitetura
 
-Este projeto é um trabalho em andamento e está em sua fase de desenvolvimento. Se você está interessado em contribuir para um projeto real, aprender e colocar em prática conceitos de Domain-Driven Design (DDD) e Arquitetura Limpa sinta-se à vontade para contribuir com melhorias para este projeto!
+Para uma análise detalhada dos Bounded Contexts, fluxo de **Transactional Outbox/Inbox** e diagramas Mermaid renderizáveis, consulte o arquivo [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## Projeto em Construção
 
-
-
-
-
-
-
-
-
-
-
-  
+Este projeto é um trabalho em andamento e está em sua fase de desenvolvimento. Se você está interessado em contribuir para um projeto real, aprender e colocar em prática conceitos de Domain-Driven Design (DDD) e Arquitetura Limpa, sinta-se à vontade para contribuir com melhorias!
