@@ -79,7 +79,7 @@ graph TD
     FinanceiroContext -.-> Contracts
 
     %% Fluxo de Gravação Atômica
-    VendasContext -->|IUnitOfWork.CommitAsync()| DbContext
+    VendasContext -->|IUnitOfWork.CommitAsync| DbContext
     DbContext -->|Gravação ACID 1| SchemaVendas
     DbContext -->|Gravação ACID 2: Interceptor Outbox| TableOutbox
 
