@@ -1,0 +1,54 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: containerflow-sqlserver
+    hostname: sqlserver
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${DB_PASSWORD:-YourStrong@Passw0rd}"
+      MSSQL_PID: "Developer"
+    ports:
+      - "${DB_PORT:-1433}:1433"
+    volumes:
+      - mssql_data:/var/opt/mssql
+    networks:
+      - containerflow-net
+    healthcheck:
+      test: [
+        "CMD-SHELL",
+        "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"${DB_PASSWORD:-YourStrong@Passw0rd}\" -C -Q 'SELECT 1' || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P \"${DB_PASSWORD:-YourStrong@Passw0rd}\" -Q 'SELECT 1'"
+      ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  api:
+    image: containerflow-api:local
+    container_name: containerflow-api
+    build:
+      context: ./ContainerFlow.API
+      dockerfile: src/Apps/ContainerFlow.API/Dockerfile
+      target: final
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Development}"
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__ContainerFlowDB: "Server=sqlserver,1433;Database=${DB_NAME:-ContainerFlowDB};User Id=sa;Password=${DB_PASSWORD:-YourStrong@Passw0rd};TrustServerCertificate=True;MultipleActiveResultSets=true;"
+      ConnectionStrings__IdentityDB: "Server=sqlserver,1433;Database=${IDENTITY_DB_NAME:-IdentityDB};User Id=sa;Password=${DB_PASSWORD:-YourStrong@Passw0rd};TrustServerCertificate=True;MultipleActiveResultSets=true;"
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    networks:
+      - containerflow-net
+
+networks:
+  containerflow-net:
+    driver: bridge
+
+volumes:
+  mssql_data:
+    driver: local
