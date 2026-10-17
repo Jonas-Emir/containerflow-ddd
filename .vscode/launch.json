@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": ".NET Core: Attach to Docker Container",
+      "type": "coreclr",
+      "request": "attach",
+      "pipeTransport": {
+        "pipeProgram": "docker",
+        "pipeArgs": ["exec", "-i", "containerflow-api"],
+        "debuggerPath": "/vsdbg/vsdbg",
+        "pipeCwd": "${workspaceFolder}"
+      },
+      "sourceFileMap": {
+        "/app/src": "${workspaceFolder}/ContainerFlow.API"
+      }
+    }
+  ]
+}

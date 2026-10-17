@@ -1,0 +1,28 @@
+services:
+  api:
+    build:
+      context: ./ContainerFlow.API
+      dockerfile: src/Apps/ContainerFlow.API/Dockerfile
+      target: dev
+    command: dotnet watch run --project src/Apps/ContainerFlow.API/ContainerFlow.API.csproj --non-interactive --urls "http://0.0.0.0:8080"
+    ports:
+      - "${DEBUG_PORT:-4026}:4026"
+    volumes:
+      - ./ContainerFlow.API:/app/src
+      - /app/src/src/Apps/ContainerFlow.API/bin
+      - /app/src/src/Apps/ContainerFlow.API/obj
+      - /app/src/src/Contextos/ContainerFlow.Clientes/bin
+      - /app/src/src/Contextos/ContainerFlow.Clientes/obj
+      - /app/src/src/Contextos/ContainerFlow.Vendas/bin
+      - /app/src/src/Contextos/ContainerFlow.Vendas/obj
+      - /app/src/src/Contextos/ContainerFlow.Engenharia/bin
+      - /app/src/src/Contextos/ContainerFlow.Engenharia/obj
+      - /app/src/src/Contextos/ContainerFlow.Financeiro/bin
+      - /app/src/src/Contextos/ContainerFlow.Financeiro/obj
+      - /app/src/src/ContainerFlow.Contracts/bin
+      - /app/src/src/ContainerFlow.Contracts/obj
+      - /app/src/src/ContainerFlow.DDD/bin
+      - /app/src/src/ContainerFlow.DDD/obj
+    environment:
+      DOTNET_USE_POLLING_FILE_WATCHER: "1"
+      ASPNETCORE_DETAILEDERRORS: "1"

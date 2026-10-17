@@ -1,0 +1,79 @@
+graph TD
+    %% Estilos Globais
+    classDef hostStyle fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef coreStyle fill:#334155,stroke:#94a3b8,stroke-width:1px,color:#f8fafc;
+    classDef contextStyle fill:#0f172a,stroke:#6366f1,stroke-width:2px,color:#f8fafc;
+    classDef entityStyle fill:#1e1b4b,stroke:#818cf8,stroke-dasharray: 3 3,color:#e0e7ff;
+    classDef eventStyle fill:#701a75,stroke:#f472b6,stroke-width:1.5px,color:#fdf2f8;
+    classDef dbStyle fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#ecfdf5;
+
+    %% Entrypoint / Host
+    subgraph Host ["Host e Infraestrutura (ContainerFlow.API)"]
+        API["REST Endpoints / Minimal APIs"]:::hostStyle
+        DbContext["AppDbContext (Composition Root e UnitOfWork)"]:::hostStyle
+        Worker["Outbox Dispatcher (BackgroundService)"]:::hostStyle
+        EvManager["EventoManager (Inbox / Outbox Handler)"]:::hostStyle
+    end
+
+    %% Core & Abstrações
+    subgraph SharedKernel ["Shared Kernel e Building Blocks"]
+        DDD["ContainerFlow.DDD\n(IAggregateRoot, Entity, IDomainEvent)"]:::coreStyle
+        Contracts["ContainerFlow.Contracts\n(IRepository, IEventoManager)"]:::coreStyle
+    end
+
+    %% Bounded Contexts
+    subgraph Contexts ["Bounded Contexts (Core Business)"]
+        
+        subgraph ClientesContext ["Contexto: Clientes"]
+            ClienteAggr["Agregado: Cliente\n(Validacao, Score, Docs)"]:::entityStyle
+        end
+
+        subgraph VendasContext ["Contexto: Vendas"]
+            PropostaAggr["Agregado: Proposta"]:::entityStyle
+            LocacaoAggr["Agregado: Locacao / Contrato"]:::entityStyle
+            EvPropostaAprovada["Integration Event:\nPropostaAprovada"]:::eventStyle
+            PropostaAggr -->|Dispara| EvPropostaAprovada
+        end
+
+        subgraph EngenhariaContext ["Contexto: Engenharia"]
+            ContainerAggr["Agregado: Conteiner\n(Status, Manutencao, Tipo)"]:::entityStyle
+            InboxEng["Inbox Reader:\nEngenhariaConsumer"]:::eventStyle
+        end
+
+        subgraph FinanceiroContext ["Contexto: Financeiro"]
+            FaturaAggr["Agregado: Fatura / Boletos"]:::entityStyle
+            InboxFin["Inbox Reader:\nFinanceiroConsumer"]:::eventStyle
+        end
+    end
+
+    %% Persistência & Outbox/Inbox Tables
+    subgraph Database ["Database (Schematized Modular Storage)"]
+        SchemaVendas[("Schema: vendas\n(Propostas, Locacoes)")]:::dbStyle
+        SchemaEng[("Schema: engenharia\n(Conteineres, Historico)")]:::dbStyle
+        SchemaFin[("Schema: financeiro\n(Faturas, Pagamentos)")]:::dbStyle
+        SchemaClientes[("Schema: clientes\n(Clientes)")]:::dbStyle
+        TableOutbox[("Schema: eventos\nTable: OutboxMessages")]:::dbStyle
+        TableInbox[("Schema: eventos\nTable: InboxMessages")]:::dbStyle
+    end
+
+    %% Dependências de Domínio para Shared Kernel
+    ClientesContext -.-> DDD
+    VendasContext -.-> DDD
+    EngenhariaContext -.-> DDD
+    FinanceiroContext -.-> DDD
+
+    %% Fluxo de Gravação com Transação Atômica
+    VendasContext -->|SaveChanges interceptado| DbContext
+    DbContext -->|Commit Atomico 1| SchemaVendas
+    DbContext -->|Commit Atomico 2: Persiste Evento| TableOutbox
+
+    %% Mecanismo de Mensageria Assíncrona
+    Worker -->|Le mensagens pendentes| TableOutbox
+    Worker -->|Encaminha via EventoManager| EvManager
+    
+    EvManager -->|Verifica se processou / Registra| TableInbox
+    EvManager -->|Entrega evento de forma idempotente| InboxEng
+    EvManager -->|Entrega evento de forma idempotente| InboxFin
+
+    InboxEng -->|Altera status para Reservado| ContainerAggr
+    InboxFin -->|Gera Fatura Inicial| FaturaAggr
