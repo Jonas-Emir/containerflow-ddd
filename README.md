@@ -16,10 +16,10 @@ Este documento fornece as instruções oficiais de engenharia para provisionar, 
 1. [Visão Geral e Arquitetura de Execução](#1-visão-geral-e-arquitetura-de-execução)
 2. [Pré-requisitos](#2-pré-requisitos)
 3. [Arquivos de Configuração de Referência](#3-arquivos-de-configuração-de-referência)
-   - [3.1. `docker-compose.yml` ](#31-docker-composeyml)
-   - [3.2. `docker-compose.override.yml` ](#32-docker-composeoverrideyml)
-   - [3.3. `Dockerfile` ](#33-dockerfile-multi-stage-otimizado)
-   - [3.4. `.env.example`](#34-envexample)
+   - [3.1. docker-compose.yml ](#31-docker-composeyml)
+   - [3.2. docker-compose.override.yml ](#32-docker-composeoverrideyml)
+   - [3.3. Dockerfile ](#33-dockerfile-multi-stage-otimizado)
+   - [3.4. .env.example](#34-envexample)
 4. [Instruções de Execução Passo a Passo](#4-instruções-de-execução-passo-a-passo)
    - [4.1. Setup Inicial](#41-setup-inicial)
    - [4.2. Inicialização dos Serviços](#42-inicialização-dos-serviços)
@@ -36,11 +36,53 @@ Este documento fornece as instruções oficiais de engenharia para provisionar, 
 
 ## 1. Visão Geral e Arquitetura de Execução
 
-A aplicação é composta por uma API ASP.NET Core (.NET 8) modular e um banco relacional **Microsoft SQL Server 2022** que abriga os esquemas segregados de domínio (`clientes`, `vendas`, `engenharia`, `financeiro`, `eventos`), além das tabelas do `Hangfire` e `ASP.NET Core Identity`.
+A aplicação é composta por uma API ASP.NET Core (.NET 8) modular e um banco relacional **Microsoft SQL Server 2022** que abriga os esquemas segregados de domínio (clientes, vendas, engenharia, financeiro, eventos), além das tabelas do Hangfire e ASP.NET Core Identity.
 
 ### Topologia de Rede: Host vs. Docker Bridge Network
 
+```mermaid
+graph TD
+    %% Estilos Globais
+    classDef hostStyle fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef clientStyle fill:#1e293b,stroke:#0ea5e9,stroke-width:1.5px,color:#f8fafc;
+    classDef apiStyle fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#f8fafc;
+    classDef dbStyle fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#ecfdf5;
+    classDef volStyle fill:#1c1917,stroke:#f59e0b,stroke-width:2px,color:#fef3c7;
+
+    %% Subgraph Host Machine
+    subgraph Host ["HOST MACHINE (Ambiente Local)"]
+        Swagger["Navegador / Swagger UI<br/>http://localhost:8080/swagger"]:::clientStyle
+        IDE["IDE Local / Debugger<br/>http://localhost:5104 ou Remote Attach :4026"]:::clientStyle
+        DBeaver["DBeaver / Azure Data Studio / SSMS<br/>localhost:1433"]:::clientStyle
+    end
+
+    %% Subgraph Docker Network
+    subgraph DockerNet ["DOCKER BRIDGE NETWORK (containerflow-net)"]
+        API["Serviço: api (containerflow-api)<br/>ASP.NET Core Web API (.NET 8)<br/>Porta interna: 8080 | Debugger: 4026"]:::apiStyle
+        SQL["Serviço: sqlserver (containerflow-sqlserver)<br/>Microsoft SQL Server 2022<br/>Porta interna: 1433 | Healthcheck ativo"]:::dbStyle
+    end
+
+    %% Subgraph Persistência
+    subgraph Storage ["Persistência de Dados"]
+        Volume[("Volume Persistente Docker<br/>mssql_data (/var/opt/mssql)")]:::volStyle
+    end
+
+    %% Mapeamentos de Porta (Host -> Containers)
+    Swagger -->|Porta Mapeada 8080:8080| API
+    IDE -.->|Porta Mapeada 4026:4026 (vsdbg)| API
+    DBeaver -->|Porta Mapeada 1433:1433| SQL
+
+    %% Comunicação Interna Container -> Container
+    API -->|DNS Interno: sqlserver:1433| SQL
+
+    %% Persistência SQL Server -> Volume
+    SQL -->|Persistência em Disco| Volume
 ```
+
+<details>
+<summary>Visualizar topologia em modo texto (ASCII)</summary>
+
+```text
  ┌────────────────────────────────────────────────────────────────────────┐
  │                              HOST MACHINE                              │
  │                                                                        │
@@ -51,10 +93,10 @@ A aplicação é composta por uma API ASP.NET Core (.NET 8) modular e um banco r
                      │ Porta Mapeada 8080:8080         │ Porta Mapeada 1433:1433
                      │                                 │
  ┌───────────────────▼─────────────────────────────────▼──────────────────┐
- │               DOCKER BRIDGE NETWORK (`containerflow-net`)              │
+ │               DOCKER BRIDGE NETWORK (containerflow-net)                │
  │                                                                        │
  │   ┌───────────────────────────┐      ┌─────────────────────────────┐   │
- │   │      Serviço: `api`       │      │   Serviço: `sqlserver`      │   │
+ │   │       Serviço: api        │      │    Serviço: sqlserver       │   │
  │   │                           │ DNS  │                             │   │
  │   │  ASP.NET Core Web API     ├─────►│  MS SQL Server 2022         │   │
  │   │  Porta interna: 8080      │      │  Porta interna: 1433        │   │
@@ -68,12 +110,14 @@ A aplicação é composta por uma API ASP.NET Core (.NET 8) modular e um banco r
                                                 └─────────────┘
 ```
 
+</details>
+
 ### Regras Críticas de Resolução de Nomes (DNS):
-1. **Comunicação Container ➔ Container:** A API dentro do container resolve o banco através do **hostname do serviço** (`sqlserver`) fornecido pelo DNS interno do Docker Compose:  
-   `Server=sqlserver,1433;Database=ContainerFlowDB;...`
-2. **Comunicação Host ➔ Container:** Qualquer processo rodando fora do Docker (sua IDE local, Azure Data Studio, DBeaver, terminal executando `dotnet ef`) **não enxerga** o nome de host `sqlserver`. O Host deve sempre usar a porta mapeada no loopback:  
-   `Server=localhost,1433;Database=ContainerFlowDB;...`
-3. **Loopback (`localhost`) dentro do container:** Se a API dentro do container tentar conectar em `localhost:1433`, a requisição será direcionada para a própria pilha de rede do container da API, falhando com conexão recusada.
+1. **Comunicação Container -> Container:** A API dentro do container resolve o banco através do **hostname do serviço** (sqlserver) fornecido pelo DNS interno do Docker Compose:  
+   Server=sqlserver,1433;Database=ContainerFlowDB;...
+2. **Comunicação Host -> Container:** Qualquer processo rodando fora do Docker (sua IDE local, Azure Data Studio, DBeaver, terminal executando dotnet ef) **não enxerga** o nome de host sqlserver. O Host deve sempre usar a porta mapeada no loopback:  
+   Server=localhost,1433;Database=ContainerFlowDB;...
+3. **Loopback (localhost) dentro do container:** Se a API dentro do container tentar conectar em localhost:1433, a requisição será direcionada para a própria pilha de rede do container da API, falhando com conexão recusada.
 
 ---
 
@@ -86,7 +130,7 @@ Certifique-se de possuir instalado em sua estação de desenvolvimento:
 - **Git**.
 - **Ferramenta de visualização de banco de dados**: [Azure Data Studio](https://azure.microsoft.com/pt-br/products/data-studio), [DBeaver Community](https://dbeaver.io/) ou [SSMS](https://learn.microsoft.com/sql/ssms/download-sql-server-management-studio-ssms).
 - **IDEs recomendadas**:
-  - **VS Code**: Com as extensões *C# Dev Kit* (`ms-dotnettools.csdevkit`) e *Docker* (`ms-azuretools.vscode-docker`).
+  - **VS Code**: Com as extensões *C# Dev Kit* (ms-dotnettools.csdevkit) e *Docker* (ms-azuretools.vscode-docker).
   - **Visual Studio 2022** (v17.8+) com cargas *ASP.NET e desenvolvimento Web* e *Ferramentas de Desenvolvimento de Contêiner*.
   - **JetBrains Rider** (2023.3+).
 
@@ -94,9 +138,9 @@ Certifique-se de possuir instalado em sua estação de desenvolvimento:
 
 ## 3. Arquivos de Configuração de Referência
 
-### 3.1. `docker-compose.yml`
+### 3.1. docker-compose.yml
 
-Arquivo de orquestração padrão, com suporte a healthcheck integrado no SQL Server, rede isolada e controle determinístico de inicialização (`depends_on` com `condition: service_healthy`):
+Arquivo de orquestração padrão, com suporte a healthcheck integrado no SQL Server, rede isolada e controle determinístico de inicialização (depends_on com condition: service_healthy):
 
 ```yaml
 services:
@@ -157,9 +201,9 @@ volumes:
 
 ---
 
-### 3.2. `docker-compose.override.yml`
+### 3.2. docker-compose.override.yml
 
-> **Como funciona:** O Docker Compose mescla automaticamente o `docker-compose.override.yml` com o `docker-compose.yml`. Este arquivo configura o serviço `api` para o estágio de desenvolvimento com o SDK, ativando **Hot Reload (`dotnet watch`)** via volume e expondo a porta de depuração remota (`4026`).
+> **Como funciona:** O Docker Compose mescla automaticamente o docker-compose.override.yml com o docker-compose.yml. Este arquivo configura o serviço api para o estágio de desenvolvimento com o SDK, ativando **Hot Reload (dotnet watch)** via volume e expondo a porta de depuração remota (4026).
 
 ```yaml
 services:
@@ -196,10 +240,10 @@ services:
 
 ---
 
-### 3.3. `Dockerfile` Multi-Stage Otimizado
+### 3.3. Dockerfile Multi-Stage Otimizado
 
-Localização: `ContainerFlow.API/src/Apps/ContainerFlow.API/Dockerfile`  
-Contexto de build do Docker: `./ContainerFlow.API` (raiz da solução .NET, garantindo acesso aos projetos de contratos e bounded contexts).
+Localização: ContainerFlow.API/src/Apps/ContainerFlow.API/Dockerfile  
+Contexto de build do Docker: ./ContainerFlow.API (raiz da solução .NET, garantindo acesso aos projetos de contratos e bounded contexts).
 
 ```dockerfile
 # ==============================================================================
@@ -272,7 +316,7 @@ ENTRYPOINT ["dotnet", "ContainerFlow.API.dll"]
 
 ---
 
-### 3.4. `.env.example`
+### 3.4. .env.example
 
 ```env
 # ==============================================================================
@@ -308,7 +352,7 @@ Copy-Item .env.example .env
 ```
 
 > [!IMPORTANT]
-> A senha padrão do SQL Server (`YourStrong@Passw0rd`) atende à política obrigatória de complexidade (letras maiúsculas, minúsculas, números e caracteres especiais). Senhas simples impedem a inicialização do container do SQL Server.
+> A senha padrão do SQL Server (YourStrong@Passw0rd) atende à política obrigatória de complexidade (letras maiúsculas, minúsculas, números e caracteres especiais). Senhas simples impedem a inicialização do container do SQL Server.
 
 ---
 
@@ -333,14 +377,14 @@ containerflow-sqlserver  mssql/server:2022-latest  "/opt/mssql/bin/sqls…"   sq
 containerflow-api        containerflow-api:local   "dotnet watch run --…"   api          Up 20s                    0.0.0.0:8080->8080/tcp, 0.0.0.0:4026->4026/tcp
 ```
 
-Após o status do `sqlserver` indicar **`(healthy)`**, acesse a documentação interativa Swagger:  
-👉 **http://localhost:8080/swagger**
+Após o status do sqlserver indicar **(healthy)**, acesse a documentação interativa Swagger:  
+**http://localhost:8080/swagger**
 
 ---
 
 ### 4.3. Execução de Migrações do Banco de Dados (EF Core)
 
-A solução conta com dois contextos de banco de dados (`AppDbContext` e `IdentityDbContext`).
+A solução conta com dois contextos de banco de dados (AppDbContext e IdentityDbContext).
 
 #### Método 1: Pelo Host (Recomendado se possuir o .NET SDK instalado)
 ```bash
@@ -381,8 +425,8 @@ docker compose run --rm api dotnet ef database update \
    dotnet user-secrets set "ConnectionStrings:IdentityDB" "Server=localhost,1433;Database=IdentityDB;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=True;MultipleActiveResultSets=true;"
    ```
 3. **Execute o Debug:**
-   - No **Visual Studio 2022 / Rider**: Selecione o perfil `http` (porta local `5104`) e pressione **`F5`**.
-   - No **VS Code**: Pressione **`F5`** com o profile `.NET Core Launch (web)`.
+   - No **Visual Studio 2022 / Rider**: Selecione o perfil http (porta local 5104) e pressione **F5**.
+   - No **VS Code**: Pressione **F5** com o profile .NET Core Launch (web).
    - Seus breakpoints serão atingidos instantaneamente no código dos Bounded Contexts e nos jobs em segundo plano do Hangfire.
 
 ---
@@ -390,8 +434,8 @@ docker compose run --rm api dotnet ef database update \
 ### Estratégia 2: Remote Debugging (API e Banco em Containers)
 > **Melhor para paridade de ambiente:** Execução idêntica a contêineres de produção em Linux.
 
-#### Configuração para VS Code (`.vscode/launch.json`):
-Crie o arquivo `.vscode/launch.json` na raiz:
+#### Configuração para VS Code (.vscode/launch.json):
+Crie o arquivo .vscode/launch.json na raiz:
 
 ```json
 {
@@ -415,17 +459,17 @@ Crie o arquivo `.vscode/launch.json` na raiz:
 }
 ```
 
-1. Suba o ambiente: `docker compose up -d`
-2. No VS Code, abra o painel **Run and Debug** (`Ctrl+Shift+D`), escolha **`.NET Core: Attach to Docker Container`** e pressione **`F5`**.
-3. Selecione o processo `dotnet ContainerFlow.API.dll` (ou processo filho do `dotnet watch`).
-4. Seus breakpoints locais serão ativados via mapeamento de diretórios do `sourceFileMap`.
+1. Suba o ambiente: docker compose up -d
+2. No VS Code, abra o painel **Run and Debug** (Ctrl+Shift+D), escolha **.NET Core: Attach to Docker Container** e pressione **F5**.
+3. Selecione o processo dotnet ContainerFlow.API.dll (ou processo filho do dotnet watch).
+4. Seus breakpoints locais serão ativados via mapeamento de diretórios do sourceFileMap.
 
 #### Configuração para Visual Studio 2022:
-1. Abra a solução `ContainerFlow.sln`.
-2. Vá em **Depurar (Debug) > Anexar ao Processo (Attach to Process...)** (`Ctrl+Alt+P`).
-3. Em **Tipo de Conexão**, selecione: **`Docker (Contêiner do Linux)`**.
-4. Em **Destino da Conexão**, selecione `containerflow-api`.
-5. Localize o processo `dotnet` e clique em **Anexar (Attach)**.
+1. Abra a solução ContainerFlow.sln.
+2. Vá em **Depurar (Debug) > Anexar ao Processo (Attach to Process...)** (Ctrl+Alt+P).
+3. Em **Tipo de Conexão**, selecione: **Docker (Contêiner do Linux)**.
+4. Em **Destino da Conexão**, selecione containerflow-api.
+5. Localize o processo dotnet e clique em **Anexar (Attach)**.
 
 ---
 
@@ -436,7 +480,7 @@ Crie o arquivo `.vscode/launch.json` na raiz:
 docker compose exec -it sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "YourStrong@Passw0rd" -C
 ```
 
-Consultas úteis (digite o comando e finalize com `GO`):
+Consultas úteis (digite o comando e finalize com GO):
 ```sql
 -- 1. Verificar bases de dados
 SELECT name FROM sys.databases;
@@ -462,11 +506,11 @@ QUIT
 ```
 
 #### Conectando Ferramentas Visuais (Azure Data Studio, DBeaver, SSMS):
-- **Host:** `localhost`
-- **Port:** `1433`
-- **User:** `sa`
-- **Password:** `YourStrong@Passw0rd`
-- **Criptografia / SSL:** Marque explicitamente a opção **Trust Server Certificate** (`TrustServerCertificate=True`).
+- **Host:** localhost
+- **Port:** 1433
+- **User:** sa
+- **Password:** YourStrong@Passw0rd
+- **Criptografia / SSL:** Marque explicitamente a opção **Trust Server Certificate** (TrustServerCertificate=True).
 
 ---
 
@@ -501,40 +545,40 @@ curl -I http://localhost:8080/swagger/index.html
 
 | Operação | Comando |
 | :--- | :--- |
-| **Subir todo o ambiente em segundo plano** | `docker compose up -d` |
-| **Subir apenas o banco de dados** | `docker compose up -d sqlserver` |
-| **Parar containers mantendo o estado** | `docker compose stop` |
-| **Derrubar containers mantendo dados dos volumes** | `docker compose down` |
-| **Reset Completo (Derrubar containers e APAGAR volumes de banco)** | `docker compose down -v` |
-| **Reconstruir imagens sem cache** | `docker compose build --no-cache` |
-| **Reiniciar apenas a API** | `docker compose restart api` |
-| **Limpar containers e imagens órfãs** | `docker system prune -f` |
+| **Subir todo o ambiente em segundo plano** | docker compose up -d |
+| **Subir apenas o banco de dados** | docker compose up -d sqlserver |
+| **Parar containers mantendo o estado** | docker compose stop |
+| **Derrubar containers mantendo dados dos volumes** | docker compose down |
+| **Reset Completo (Derrubar containers e APAGAR volumes de banco)** | docker compose down -v |
+| **Reconstruir imagens sem cache** | docker compose build --no-cache |
+| **Reiniciar apenas a API** | docker compose restart api |
+| **Limpar containers e imagens órfãs** | docker system prune -f |
 
 ---
 
 ## 7. Troubleshooting / Resolução de Problemas
 
-### 1. Conflito de Porta: `bind: address already in use: 1433`
+### 1. Conflito de Porta: bind: address already in use: 1433
 - **Causa:** Uma instância local do SQL Server já está em execução no host.
-- **Solução:** No Windows, encerre o serviço local em `services.msc` (*SQL Server (MSSQLSERVER)*) ou altere a porta externa no seu `.env`:
+- **Solução:** No Windows, encerre o serviço local em services.msc (*SQL Server (MSSQLSERVER)*) ou altere a porta externa no seu .env:
   ```env
   DB_PORT=14333
   ```
   *(A API no container continuará comunicando na porta interna 1433 sem impactos)*.
 
-### 2. Erro de Certificado SSL: `The certificate chain was issued by an authority that is not trusted`
-- **Causa:** No .NET 8 e EF Core 9, o driver `Microsoft.Data.SqlClient` exige conexões criptografadas por padrão. Em ambientes de desenvolvimento locais sem certificado comercial emitido por autoridade certificadora (CA), a conexão falha.
-- **Solução:** Adicione sempre `TrustServerCertificate=True;` na Connection String (conforme configurado em nosso `docker-compose.yml` e nos exemplos de User Secrets).
+### 2. Erro de Certificado SSL: The certificate chain was issued by an authority that is not trusted
+- **Causa:** No .NET 8 e EF Core 9, o driver Microsoft.Data.SqlClient exige conexões criptografadas por padrão. Em ambientes de desenvolvimento locais sem certificado comercial emitido por autoridade certificadora (CA), a conexão falha.
+- **Solução:** Adicione sempre TrustServerCertificate=True; na Connection String (conforme configurado em nosso docker-compose.yml e nos exemplos de User Secrets).
 
 ### 3. Falha de Conexão na Inicialização da API (Crash no Startup)
 - **Causa:** A API tentou se conectar antes de o SQL Server estar pronto para aceitar requisições.
-- **Solução:** O `docker-compose.yml` utiliza `condition: service_healthy` vinculado ao `healthcheck` oficial do SQL Server. Nunca remova esse bloco para assegurar que a API aguarde o término do processo de boot do banco.
+- **Solução:** O docker-compose.yml utiliza condition: service_healthy vinculado ao healthcheck oficial do SQL Server. Nunca remova esse bloco para assegurar que a API aguarde o término do processo de boot do banco.
 
 ### 4. Breakpoints não são atingidos no Remote Debugger
-- **Causa 1:** O `sourceFileMap` no `.vscode/launch.json` deve apontar obrigatoriamente para `"${workspaceFolder}/ContainerFlow.API"`.
-- **Causa 2:** Os binários foram compilados em modo `Release` (otimizações do compilador removem os símbolos de depuração `.pdb`). Assegure que a imagem utilize o target `dev` com configuração `Debug`.
-- **Causa 3:** Conflito de binários locais gerados no Windows com os binários montados no container Linux. Verifique se os volumes anônimos para `/bin` e `/obj` continuam presentes no `docker-compose.override.yml`.
+- **Causa 1:** O sourceFileMap no .vscode/launch.json deve apontar obrigatoriamente para "${workspaceFolder}/ContainerFlow.API".
+- **Causa 2:** Os binários foram compilados em modo Release (otimizações do compilador removem os símbolos de depuração .pdb). Assegure que a imagem utilize o target dev com configuração Debug.
+- **Causa 3:** Conflito de binários locais gerados no Windows com os binários montados no container Linux. Verifique se os volumes anônimos para /bin e /obj continuam presentes no docker-compose.override.yml.
 
-### 5. Hot Reload (`dotnet watch`) não detecta arquivos modificados no Windows/WSL2
+### 5. Hot Reload (dotnet watch) não detecta arquivos modificados no Windows/WSL2
 - **Causa:** Notificações de alteração do sistema de arquivos podem não ser transmitidas entre o host Windows e o contêiner Linux.
-- **Solução:** A variável de ambiente `DOTNET_USE_POLLING_FILE_WATCHER: "1"` (já inclusa no `docker-compose.override.yml`) força o .NET a monitorar periodicamente os arquivos em disco por amostragem.
+- **Solução:** A variável de ambiente DOTNET_USE_POLLING_FILE_WATCHER: "1" (já inclusa no docker-compose.override.yml) força o .NET a monitorar periodicamente os arquivos em disco por amostragem.

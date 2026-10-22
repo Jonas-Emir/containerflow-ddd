@@ -1,0 +1,36 @@
+graph TD
+    %% Estilos Globais
+    classDef hostStyle fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef clientStyle fill:#1e293b,stroke:#0ea5e9,stroke-width:1.5px,color:#f8fafc;
+    classDef apiStyle fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#f8fafc;
+    classDef dbStyle fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#ecfdf5;
+    classDef volStyle fill:#1c1917,stroke:#f59e0b,stroke-width:2px,color:#fef3c7;
+
+    %% Subgraph Host Machine
+    subgraph Host ["HOST MACHINE (Ambiente Local)"]
+        Swagger["Navegador / Swagger UI<br/>http://localhost:8080/swagger"]:::clientStyle
+        IDE["IDE Local / Debugger<br/>http://localhost:5104 ou Remote Attach :4026"]:::clientStyle
+        DBeaver["DBeaver / Azure Data Studio / SSMS<br/>localhost:1433"]:::clientStyle
+    end
+
+    %% Subgraph Docker Network
+    subgraph DockerNet ["DOCKER BRIDGE NETWORK (containerflow-net)"]
+        API["Serviço: api (containerflow-api)<br/>ASP.NET Core Web API (.NET 8)<br/>Porta interna: 8080 | Debugger: 4026"]:::apiStyle
+        SQL["Serviço: sqlserver (containerflow-sqlserver)<br/>Microsoft SQL Server 2022<br/>Porta interna: 1433 | Healthcheck ativo"]:::dbStyle
+    end
+
+    %% Subgraph Persistência
+    subgraph Storage ["Persistência de Dados"]
+        Volume[("Volume Persistente Docker<br/>mssql_data (/var/opt/mssql)")]:::volStyle
+    end
+
+    %% Mapeamentos de Porta (Host -> Containers)
+    Swagger -->|Porta Mapeada 8080:8080| API
+    IDE -.->|Porta Mapeada 4026:4026 (vsdbg)| API
+    DBeaver -->|Porta Mapeada 1433:1433| SQL
+
+    %% Comunicação Interna Container -> Container
+    API -->|DNS Interno: sqlserver:1433| SQL
+
+    %% Persistência SQL Server -> Volume
+    SQL -->|Persistência em Disco| Volume
